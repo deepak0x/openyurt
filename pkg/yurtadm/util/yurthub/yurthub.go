@@ -426,36 +426,28 @@ func CheckYurthubServiceHealth(yurthubServer string) error {
 
 // CheckYurthubHealthz check if YurtHub is healthy.
 func CheckYurthubHealthz(yurthubServer string) error {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerHealthzURLPath), nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{}
-	return wait.PollUntilContextTimeout(context.Background(), time.Second*5, 300*time.Second, true, func(ctx context.Context) (bool, error) {
-		resp, err := client.Do(req)
-		if err != nil {
-			return false, nil
-		}
-		ok, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return false, nil
-		}
-		return string(ok) == "OK", nil
-	})
+	url := fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerHealthzURLPath)
+	return pollYurthubEndpointOK(url, time.Second*5, 300*time.Second)
 }
 
 // CheckYurthubReadyz check if YurtHub's certificates are ready or not
 func CheckYurthubReadyz(yurthubServer string) error {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerReadyzURLPath), nil)
-	if err != nil {
-		return err
-	}
+	url := fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerReadyzURLPath)
+	return pollYurthubEndpointOK(url, time.Second*5, 300*time.Second)
+}
+
+func pollYurthubEndpointOK(url string, interval, timeout time.Duration) error {
 	client := &http.Client{}
-	return wait.PollUntilContextTimeout(context.Background(), time.Second*5, 300*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(context.Background(), interval, timeout, true, func(ctx context.Context) (bool, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return false, err
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return false, nil
 		}
+		defer resp.Body.Close()
 		ok, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return false, nil

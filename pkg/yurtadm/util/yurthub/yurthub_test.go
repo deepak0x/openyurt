@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1358,4 +1359,68 @@ func Test_CheckYurthubHealthz_WithTimeout(t *testing.T) {
 
 	err := CheckYurthubServiceHealth("127.0.0.1")
 	assert.Error(t, err)
+}
+
+func Test_pollYurthubEndpointOK_Success(t *testing.T) {
+	ts := newLocalHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer ts.Close()
+
+	err := pollYurthubEndpointOK(ts.URL, 50*time.Millisecond, 2*time.Second)
+	assert.NoError(t, err)
+}
+
+func Test_pollYurthubEndpointOK_EventualOK(t *testing.T) {
+	var calls atomic.Int32
+	ts := newLocalHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("NotReady"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer ts.Close()
+
+	err := pollYurthubEndpointOK(ts.URL, 50*time.Millisecond, 3*time.Second)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, calls.Load(), int32(3))
+}
+
+func Test_pollYurthubEndpointOK_TimesOutWhenNeverOK(t *testing.T) {
+	ts := newLocalHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("NotReady"))
+	}))
+	defer ts.Close()
+
+	err := pollYurthubEndpointOK(ts.URL, 50*time.Millisecond, 300*time.Millisecond)
+	assert.Error(t, err)
+}
+
+func Test_pollYurthubEndpointOK_ContextPropagation(t *testing.T) {
+	release := make(chan struct{})
+	ts := newLocalHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer ts.Close()
+	defer close(release)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pollYurthubEndpointOK(ts.URL, 100*time.Millisecond, 400*time.Millisecond)
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("pollYurthubEndpointOK did not return after the timeout; context was not propagated to the in-flight request")
+	}
 }
