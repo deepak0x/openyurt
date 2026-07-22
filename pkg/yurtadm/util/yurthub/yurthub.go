@@ -439,7 +439,9 @@ func CheckYurthubReadyz(yurthubServer string) error {
 func pollYurthubEndpointOK(url string, interval, timeout time.Duration) error {
 	client := &http.Client{}
 	return wait.PollUntilContextTimeout(context.Background(), interval, timeout, true, func(ctx context.Context) (bool, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		reqCtx, cancel := context.WithTimeout(ctx, interval)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 		if err != nil {
 			return false, err
 		}

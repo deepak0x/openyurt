@@ -1424,3 +1424,17 @@ func Test_pollYurthubEndpointOK_ContextPropagation(t *testing.T) {
 		t.Fatal("pollYurthubEndpointOK did not return after the timeout; context was not propagated to the in-flight request")
 	}
 }
+
+func Test_pollYurthubEndpointOK_PerRequestTimeoutBoundsStalledSocket(t *testing.T) {
+	var hits int32
+	ts := newLocalHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	err := pollYurthubEndpointOK(ts.URL, 100*time.Millisecond, 700*time.Millisecond)
+	assert.Error(t, err)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&hits), int32(2),
+		"a stalled endpoint must be retried across poll iterations; each request should be bounded by the interval, not the full timeout")
+}
