@@ -19,7 +19,7 @@ package yurthub
 import (
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1440,27 +1440,30 @@ func Test_pollYurthubEndpointOK_PerRequestTimeoutBoundsStalledSocket(t *testing.
 		"a stalled endpoint must be retried across poll iterations; each request should be bounded by the interval, not the full timeout")
 }
 
-func startFixedPortServer(t *testing.T, addr string, handler http.HandlerFunc) *httptest.Server {
-	t.Helper()
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Skipf("cannot bind %s in this environment: %v", addr, err)
-	}
-	ts := httptest.NewUnstartedServer(handler)
-	_ = ts.Listener.Close()
-	ts.Listener = l
-	ts.Start()
-	return ts
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func Test_CheckYurthubHealthzAndReadyz_OK(t *testing.T) {
-	ts := startFixedPortServer(t, "127.0.0.1:10267", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("OK"))
-	}))
-	defer ts.Close()
+	original := http.DefaultTransport
+	defer func() { http.DefaultTransport = original }()
+
+	var paths []string
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("OK")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
 
 	assert.NoError(t, CheckYurthubHealthz("127.0.0.1"))
 	assert.NoError(t, CheckYurthubReadyz("127.0.0.1"))
+	assert.Equal(t, []string{constants.ServerHealthzURLPath, constants.ServerReadyzURLPath}, paths)
 }
 
 func Test_pollYurthubEndpointOK_RequestBuildError(t *testing.T) {
