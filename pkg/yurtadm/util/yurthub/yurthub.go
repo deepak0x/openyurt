@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -426,22 +427,24 @@ func CheckYurthubServiceHealth(yurthubServer string) error {
 
 // CheckYurthubHealthz check if YurtHub is healthy.
 func CheckYurthubHealthz(yurthubServer string) error {
-	url := fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerHealthzURLPath)
+	url := fmt.Sprintf("http://%s%s", net.JoinHostPort(yurthubServer, "10267"), constants.ServerHealthzURLPath)
 	return pollYurthubEndpointOK(url, time.Second*5, 300*time.Second)
 }
 
 // CheckYurthubReadyz check if YurtHub's certificates are ready or not
 func CheckYurthubReadyz(yurthubServer string) error {
-	url := fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerReadyzURLPath)
+	url := fmt.Sprintf("http://%s%s", net.JoinHostPort(yurthubServer, "10267"), constants.ServerReadyzURLPath)
 	return pollYurthubEndpointOK(url, time.Second*5, 300*time.Second)
 }
 
 func pollYurthubEndpointOK(url string, interval, timeout time.Duration) error {
-	client := &http.Client{}
+	// Bound each request with a client timeout that prevents a blackholed or
+	// stalled socket from hanging for the full poll window, while staying
+	// decoupled from the poll interval so slow-but-valid edge nodes don't trip
+	// a false negative. Outer poll cancellation still propagates via ctx.
+	client := &http.Client{Timeout: min(interval*3, timeout)}
 	return wait.PollUntilContextTimeout(context.Background(), interval, timeout, true, func(ctx context.Context) (bool, error) {
-		reqCtx, cancel := context.WithTimeout(ctx, interval)
-		defer cancel()
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return false, err
 		}
@@ -459,7 +462,7 @@ func pollYurthubEndpointOK(url string, interval, timeout time.Duration) error {
 }
 
 func CheckYurthubReadyzOnce(yurthubServer string) bool {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s%s", fmt.Sprintf("%s:10267", yurthubServer), constants.ServerReadyzURLPath), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s%s", net.JoinHostPort(yurthubServer, "10267"), constants.ServerReadyzURLPath), nil)
 	if err != nil {
 		return false
 	}
